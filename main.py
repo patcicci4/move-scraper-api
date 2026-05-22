@@ -1,12 +1,12 @@
 import re
 from bs4 import BeautifulSoup
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import requests
 import uvicorn
 
 app = FastAPI(
     title="Enterprise Movie Intelligence API",
-    description="Commercial-grade endpoints providing budgets, revenue modeling, genres, ratings, and runtimes.",
+    description="Commercial-grade endpoints providing budgets, revenue modeling, genres, ratings, and advanced search filters.",
 )
 
 
@@ -24,13 +24,10 @@ def clean_number(raw_text):
 def analyze_genres_and_rating(title):
     """Programmatically assigns logical classifications based on industry title matching."""
     title_lower = title.lower()
-
-    # Default fallbacks
     genres = ["Drama"]
     mpaa_rating = "PG-13"
-    runtime = 112  # Average feature film length
+    runtime = 112
 
-    # Genre keyword routing matrix
     if any(w in title_lower for w in ["star", "war", "alien", "space", "avatar", "world", "chronicles"]):
         genres = ["Sci-Fi", "Action", "Adventure"]
         runtime = 134
@@ -70,8 +67,7 @@ def scrape_enterprise_movie_data():
         movies = []
         table_rows = soup.find_all("tr")
 
-        # Extract top 25 high-value rows
-        for row in table_rows[1:26]:
+        for row in table_rows[1:51]: # Expanded to 50 movies for better filtering pools
             cols = row.find_all("td")
             if len(cols) >= 4:
                 release_date = cols[1].get_text(strip=True)
@@ -79,18 +75,12 @@ def scrape_enterprise_movie_data():
                 budget_raw = cols[3].get_text(strip=True)
 
                 budget_amount = clean_number(budget_raw)
-
-                # 1. Model Expected/Actual Revenue (Industry baseline standard ~2.7x budget)
                 expected_revenue = int(budget_amount * 2.73)
-
-                # 2. Extract Genres and Ratings
                 genres, mpaa_rating, runtime_minutes = analyze_genres_and_rating(title)
 
-                # 3. Format Runtimes into human-readable versions
                 hours = runtime_minutes // 60
                 mins = runtime_minutes % 60
                 formatted_length = f"{hours}h {mins}m"
-
                 search_query = title.replace(" ", "+")
 
                 movies.append(
@@ -122,19 +112,39 @@ def scrape_enterprise_movie_data():
         return []
 
 
+# --- ENDPOINT 1: THE ORIGINAL FULL LIST ---
 @app.get("/api/v1/movies/upcoming")
 def get_enterprise_upcoming():
-    """Enterprise endpoint providing clean lists, full financials, and rich metadata."""
+    """Returns the comprehensive live scraped movie list."""
     data = scrape_enterprise_movie_data()
-    if not data:
-        return {"status": "error", "message": "Backend engine offline."}
+    return {"status": "success", "total_count": len(data), "results": data}
 
-    return {
-        "status": "success",
-        "total_count": len(data),
-        "data_tier": "Enterprise Premium",
-        "results": data,
-    }
+
+# --- ENDPOINT 2: NEW SEARCH ENDPOINT ---
+@app.get("/api/v1/movies/search")
+def search_movie_by_title(q: str):
+    """Allows users to search for specific movies using a keyword query parameter."""
+    data = scrape_enterprise_movie_data()
+    filtered = [m for m in data if q.lower() in m["title"].lower()]
+    return {"status": "success", "search_query": q, "total_found": len(filtered), "results": filtered}
+
+
+# --- ENDPOINT 3: NEW GENRE FILTER ENDPOINT ---
+@app.get("/api/v1/movies/genre/{genre_name}")
+def filter_by_genre(genre_name: str):
+    """Allows users to target a specific genre category path (e.g., Action, Sci-Fi, Horror)."""
+    data = scrape_enterprise_movie_data()
+    filtered = [m for m in data if genre_name.lower() in [g.lower() for g in m["classifications"]["genres"]]]
+    return {"status": "success", "genre_filtered": genre_name, "total_found": len(filtered), "results": filtered}
+
+
+# --- ENDPOINT 4: NEW BLOCKBUSTER FILTER ENDPOINT ---
+@app.get("/api/v1/movies/blockbusters")
+def get_high_budgets():
+    """Returns only tier-one films with production budgets over $100,000,000."""
+    data = scrape_enterprise_movie_data()
+    filtered = [m for m in data if m["financials"]["production_budget"] >= 100000000]
+    return {"status": "success", "filter": "Budgets >= $100M", "total_found": len(filtered), "results": filtered}
 
 
 if __name__ == "__main__":
